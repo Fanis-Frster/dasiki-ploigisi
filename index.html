@@ -17,141 +17,269 @@ button{background:#285b3b;color:white;border:0;font-weight:bold}
 </style>
 </head>
 <body>
+
 <header>🌲 Δασική Πλοήγηση</header>
+
 <div class="controls">
-<label>1. Φόρτωσε τα σημεία σου (GeoJSON)
-<input id="file" type="file" accept=".geojson,.json,application/geo+json,application/json">
+<label>1. Προορισμός κρουνών
+<select id="target">
+<option value="">Φόρτωση κρουνών...</option>
+</select>
 </label>
-<label>2. Επίλεξε σημείο
-<select id="target"><option value="">Φόρτωσε πρώτα το αρχείο</option></select>
-</label>
+
 <button id="gps">📍 Εντοπισμός θέσης μου</button>
 <button id="follow">▶ Συνεχής παρακολούθηση GPS</button>
 <button id="stop">■ Διακοπή GPS</button>
 <button id="route">↗ Άνοιγμα πλοήγησης Google Maps</button>
 </div>
+
 <div id="map"></div>
-<div id="info">Φόρτωσε το GeoJSON και επίλεξε το σημείο προορισμού.</div>
+<div id="info">Φόρτωση κρουνών και πολυγώνων...</div>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const map=L.map('map').setView([37.9,23.8],10);
+const map=L.map('map').setView([36.4,25.45],11);
+
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
- maxZoom:19,attribution:'© OpenStreetMap contributors'
+ maxZoom:19,
+ attribution:'© OpenStreetMap contributors'
 }).addTo(map);
 
-let features=[],targetMarker=null,userMarker=null,accuracyCircle=null;
-let pos=null,watchId=null;
+let features=[];
+let targetMarker=null;
+let userMarker=null;
+let accuracyCircle=null;
+let pos=null;
+let watchId=null;
+let pointsLayer=null;
+let polygonsLayer=null;
 
 const $=id=>document.getElementById(id);
 const info=$('info');
 
 function coords(f){
- if(!f.geometry||f.geometry.type!=='Point') return null;
+ if(!f.geometry||f.geometry.type!=='Point')return null;
  const c=f.geometry.coordinates;
+ if(!Array.isArray(c)||c.length<2)return null;
  return [c[1],c[0]];
 }
+
 function label(f,i){
  const p=f.properties||{};
- return p.name||p.NAME||p.Name||p.id||p.ID||p.code||p.CODE||p.ΚΩΔΙΚΟΣ||p.ΟΝΟΜΑΣΙΑ||('Σημείο '+(i+1));
+ return p.name||p.NAME||p.Name||p.id||p.ID||
+ p.code||p.CODE||p.ΚΩΔΙΚΟΣ||p.ΟΝΟΜΑΣΙΑ||
+ ('Κρουνός '+(i+1));
 }
+
 function chosen(){
- const i=Number($('target').value);
- return Number.isInteger(i)?features[i]:null;
+ const v=$('target').value;
+ if(v==='')return null;
+ return features[Number(v)]||null;
 }
+
 function distance(a,b){
  return map.distance(L.latLng(a),L.latLng(b));
 }
+
 function bearing(a,b){
  const r=Math.PI/180;
  const p1=a[0]*r,p2=b[0]*r,dl=(b[1]-a[1])*r;
  const y=Math.sin(dl)*Math.cos(p2);
- const x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+ const x=Math.cos(p1)*Math.sin(p2)-
+ Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
  return (Math.atan2(y,x)/r+360)%360;
 }
+
 function updateInfo(){
  const f=chosen(),t=f&&coords(f);
- if(!f||!t){info.textContent='Φόρτωσε σημεία και επίλεξε προορισμό.';return;}
+ if(!f||!t){
+  info.textContent='Επίλεξε έναν κρουνό από τη λίστα.';
+  return;
+ }
  let html='<b>Προορισμός:</b> '+label(f,features.indexOf(f));
  if(pos){
   const d=distance(pos,t),b=bearing(pos,t);
-  html+='<br><b>Απόσταση:</b> '+(d>=1000?(d/1000).toFixed(2)+' km':Math.round(d)+' m');
+  html+='<br><b>Απόσταση:</b> '+
+   (d>=1000?(d/1000).toFixed(2)+' km':Math.round(d)+' m');
   html+='<br><b>Κατεύθυνση από Βορρά:</b> '+Math.round(b)+'°';
-  html+='<br><b>Ακρίβεια GPS:</b> περίπου '+Math.round(pos.accuracy)+' m';
- }else html+='<br>Πάτησε «Εντοπισμός θέσης μου».';
+  html+='<br><b>Ακρίβεια GPS:</b> περίπου '+
+   Math.round(pos.accuracy)+' m';
+ }else{
+  html+='<br>Πάτησε «Εντοπισμός θέσης μου».';
+ }
  info.innerHTML=html;
 }
+
 function selectTarget(){
  const f=chosen(),t=f&&coords(f);
  if(!t)return;
  if(targetMarker)map.removeLayer(targetMarker);
- targetMarker=L.marker(t).addTo(map).bindPopup(label(f,features.indexOf(f))).openPopup();
+ targetMarker=L.marker(t).addTo(map)
+  .bindPopup(label(f,features.indexOf(f))).openPopup();
  map.setView(t,17);
  updateInfo();
 }
-$('file').addEventListener('change',async e=>{
- const file=e.target.files[0];if(!file)return;
- try{
-  const data=JSON.parse(await file.text());
-  if(data.type==='FeatureCollection')features=data.features;
-  else if(data.type==='Feature')features=[data];
-  else throw new Error('Το αρχείο δεν είναι GeoJSON FeatureCollection.');
-  features=features.filter(f=>coords(f));
-  if(!features.length)throw new Error('Δεν βρέθηκαν σημειακά γεωμετρικά αντικείμενα.');
-  const sel=$('target');sel.innerHTML='';
-  features.forEach((f,i)=>{
-   const o=document.createElement('option');
-   o.value=i;o.textContent=label(f,i);sel.appendChild(o);
-  });
-  if(window.pointsLayer)map.removeLayer(window.pointsLayer);
-  window.pointsLayer=L.geoJSON({type:'FeatureCollection',features},{
-   pointToLayer:(f,ll)=>L.circleMarker(ll,{radius:7,color:'#176b3a',fillOpacity:.9}),
+
+async function loadPoints(){
+ const response=await fetch('./points.geojson');
+ if(!response.ok)throw new Error(
+  'Δεν βρέθηκε το points.geojson ('+response.status+').'
+ );
+
+ const data=await response.json();
+ if(data.type==='FeatureCollection')features=data.features||[];
+ else if(data.type==='Feature')features=[data];
+ else throw new Error('Το points.geojson δεν είναι έγκυρο GeoJSON.');
+
+ features=features.filter(f=>coords(f));
+ if(!features.length)throw new Error(
+  'Δεν βρέθηκαν σημειακοί κρουνοί στο points.geojson.'
+ );
+
+ const sel=$('target');
+ sel.innerHTML='';
+
+ features.forEach((f,i)=>{
+  const o=document.createElement('option');
+  o.value=i;
+  o.textContent=label(f,i);
+  sel.appendChild(o);
+ });
+
+ pointsLayer=L.geoJSON(
+  {type:'FeatureCollection',features},
+  {
+   pointToLayer:(f,ll)=>L.circleMarker(ll,{
+    radius:7,
+    color:'#176b3a',
+    fillColor:'#2e9d50',
+    fillOpacity:.9
+   }),
    onEachFeature:(f,l)=>l.bindPopup(label(f,features.indexOf(f)))
-  }).addTo(map);
-  map.fitBounds(window.pointsLayer.getBounds(),{padding:[20,20]});
-  selectTarget();
- }catch(err){alert('Σφάλμα αρχείου: '+err.message);}
-});
-$('target').addEventListener('change',selectTarget);
+  }
+ ).addTo(map);
+
+ sel.addEventListener('change',selectTarget);
+
+ map.fitBounds(pointsLayer.getBounds(),{padding:[20,20]});
+ selectTarget();
+}
+
+async function loadPolygons(){
+ const response=await fetch('./Apagoreusi_Thiras.geojson');
+ if(!response.ok)throw new Error(
+  'Δεν βρέθηκε το Apagoreusi_Thiras.geojson ('+
+  response.status+').'
+ );
+
+ const data=await response.json();
+
+ polygonsLayer=L.geoJSON(data,{
+  style:feature=>({
+   color:'#16743b',
+   weight:2,
+   opacity:0.9,
+   fillColor:'#36a852',
+   fillOpacity:0.30
+  }),
+  onEachFeature:(feature,layer)=>{
+   const p=feature.properties||{};
+   const name=p.name||p.NAME||p.Name||p.ΟΝΟΜΑΣΙΑ;
+   if(name)layer.bindPopup(String(name));
+  }
+ }).addTo(map);
+
+ return polygonsLayer;
+}
 
 function locate(){
- if(!navigator.geolocation){alert('Το πρόγραμμα περιήγησης δεν υποστηρίζει GPS.');return;}
+ if(!navigator.geolocation){
+  alert('Το πρόγραμμα περιήγησης δεν υποστηρίζει GPS.');
+  return;
+ }
  navigator.geolocation.getCurrentPosition(
   p=>setPosition(p),
   e=>alert('Δεν βρέθηκε θέση GPS: '+e.message),
   {enableHighAccuracy:true,timeout:20000,maximumAge:0}
  );
 }
+
 function setPosition(p){
  pos=[p.coords.latitude,p.coords.longitude];
  pos.accuracy=p.coords.accuracy;
+
  if(userMarker)map.removeLayer(userMarker);
  if(accuracyCircle)map.removeLayer(accuracyCircle);
- userMarker=L.circleMarker(pos,{radius:9,color:'#075ee8',fillColor:'#075ee8',fillOpacity:1})
-  .addTo(map).bindPopup('Η θέση σου');
- accuracyCircle=L.circle(pos,{radius:pos.accuracy,color:'#075ee8',fillOpacity:.08}).addTo(map);
+
+ userMarker=L.circleMarker(pos,{
+  radius:9,color:'#075ee8',
+  fillColor:'#075ee8',fillOpacity:1
+ }).addTo(map).bindPopup('Η θέση σου');
+
+ accuracyCircle=L.circle(pos,{
+  radius:pos.accuracy,color:'#075ee8',fillOpacity:.08
+ }).addTo(map);
+
  updateInfo();
 }
+
 $('gps').onclick=locate;
+
 $('follow').onclick=()=>{
  if(!navigator.geolocation)return alert('Δεν υποστηρίζεται GPS.');
  if(watchId!==null)return;
- watchId=navigator.geolocation.watchPosition(setPosition,
+
+ watchId=navigator.geolocation.watchPosition(
+  setPosition,
   e=>info.textContent='Σφάλμα GPS: '+e.message,
-  {enableHighAccuracy:true,maximumAge:2000,timeout:20000});
+  {enableHighAccuracy:true,maximumAge:2000,timeout:20000}
+ );
 };
+
 $('stop').onclick=()=>{
  if(watchId!==null)navigator.geolocation.clearWatch(watchId);
  watchId=null;
 };
+
 $('route').onclick=()=>{
  const f=chosen(),t=f&&coords(f);
  if(!t)return alert('Επίλεξε πρώτα σημείο.');
+
  const dest=t[0]+','+t[1];
  const origin=pos?pos[0]+','+pos[1]:'';
- window.open('https://www.google.com/maps/dir/?api=1'+
+
+ window.open(
+  'https://www.google.com/maps/dir/?api=1'+
   (origin?'&origin='+encodeURIComponent(origin):'')+
-  '&destination='+encodeURIComponent(dest)+'&travelmode=walking','_blank');
+  '&destination='+encodeURIComponent(dest)+
+  '&travelmode=walking',
+  '_blank'
+ );
 };
+
+async function start(){
+ try{
+  await loadPoints();
+  info.textContent='Οι κρουνοί φορτώθηκαν. Φόρτωση πολυγώνων...';
+ }catch(err){
+  info.textContent='Σφάλμα φόρτωσης κρουνών: '+err.message;
+  console.error(err);
+  return;
+ }
+
+ try{
+  await loadPolygons();
+  info.textContent='Οι κρουνοί και τα πολύγωνα φορτώθηκαν επιτυχώς. '+
+   'Επίλεξε έναν κρουνό ή εντόπισε τη θέση σου.';
+  updateInfo();
+ }catch(err){
+  info.textContent='Οι κρουνοί φορτώθηκαν, αλλά υπήρξε πρόβλημα '+
+   'με τα πολύγωνα: '+err.message;
+  console.error(err);
+ }
+}
+
+start();
 </script>
 </body>
 </html>
